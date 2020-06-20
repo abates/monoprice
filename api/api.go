@@ -3,12 +3,28 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strconv"
 	"sync"
 
 	"github.com/abates/monoprice"
 	"github.com/gorilla/mux"
 )
+
+func ParseBool(str string) (interface{}, error) {
+	b, err := strconv.ParseBool(str)
+	if err == nil {
+		if b {
+			return "01", nil
+		}
+		return "00", nil
+	}
+	return "", err
+}
+
+func ParseInt(str string) (interface{}, error) {
+	return strconv.Atoi(str)
+}
 
 type api struct {
 	amp   *monoprice.Amplifier
@@ -30,13 +46,13 @@ func New(amp *monoprice.Amplifier) (http.Handler, error) {
 	r := mux.NewRouter()
 	r.HandleFunc("/zones", http.HandlerFunc(a.listZones)).Methods("GET")
 	r.HandleFunc("/{zone}/status", a.zoneHandler(a.status)).Methods("GET")
-	r.HandleFunc("/{zone}/power/{power}", a.sendCommand(monoprice.SetPower, "power", monoprice.ParseBool)).Methods("PUT")
-	r.HandleFunc("/{zone}/mute/{mute}", a.sendCommand(monoprice.SetMute, "power", monoprice.ParseBool)).Methods("PUT")
-	r.HandleFunc("/{zone}/volume/{level}", a.sendCommand(monoprice.SetVolume, "level", monoprice.ParseInt)).Methods("PUT")
-	r.HandleFunc("/{zone}/treble/{level}", a.sendCommand(monoprice.SetTreble, "level", monoprice.ParseInt)).Methods("PUT")
-	r.HandleFunc("/{zone}/bass/{level}", a.sendCommand(monoprice.SetBass, "level", monoprice.ParseInt)).Methods("PUT")
-	r.HandleFunc("/{zone}/balance/{level}", a.sendCommand(monoprice.SetBalance, "level", monoprice.ParseInt)).Methods("PUT")
-	r.HandleFunc("/{zone}/source/{source}", a.sendCommand(monoprice.SetSource, "source", monoprice.ParseInt)).Methods("PUT")
+	r.HandleFunc("/{zone}/power/{power}", a.sendCommand(monoprice.SetPower, "power", ParseBool)).Methods("PUT")
+	r.HandleFunc("/{zone}/mute/{mute}", a.sendCommand(monoprice.SetMute, "power", ParseBool)).Methods("PUT")
+	r.HandleFunc("/{zone}/volume/{level}", a.sendCommand(monoprice.SetVolume, "level", ParseInt)).Methods("PUT")
+	r.HandleFunc("/{zone}/treble/{level}", a.sendCommand(monoprice.SetTreble, "level", ParseInt)).Methods("PUT")
+	r.HandleFunc("/{zone}/bass/{level}", a.sendCommand(monoprice.SetBass, "level", ParseInt)).Methods("PUT")
+	r.HandleFunc("/{zone}/balance/{level}", a.sendCommand(monoprice.SetBalance, "level", ParseInt)).Methods("PUT")
+	r.HandleFunc("/{zone}/source/{source}", a.sendCommand(monoprice.SetSource, "source", ParseInt)).Methods("PUT")
 	r.HandleFunc("/{zone}/restore", a.zoneHandler(a.restore)).Methods("PUT")
 
 	return r, nil
@@ -45,9 +61,10 @@ func New(amp *monoprice.Amplifier) (http.Handler, error) {
 func (a *api) listZones(w http.ResponseWriter, r *http.Request) {
 	ids := []int{}
 	a.zones.Range(func(key, value interface{}) bool {
-		ids = append(ids, value.(int))
+		ids = append(ids, key.(int))
 		return true
 	})
+	sort.Ints(ids)
 	json.NewEncoder(w).Encode(ids)
 }
 

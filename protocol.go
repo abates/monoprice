@@ -24,8 +24,9 @@ type writeResponse struct {
 }
 
 type writeRequest struct {
-	cmd  string
-	resp chan *writeResponse
+	cmd    string
+	echoed bool
+	resp   chan *writeResponse
 }
 
 type Amplifier struct {
@@ -39,10 +40,17 @@ type Amplifier struct {
 }
 
 func New(port io.ReadWriter) *Amplifier {
-	return &Amplifier{
-		writer: port,
-		reader: bufio.NewReader(port),
+	amp := &Amplifier{
+		writer:  port,
+		reader:  bufio.NewReader(port),
+		readCh:  make(chan string, 1),
+		writeCh: make(chan *writeRequest, 1),
 	}
+
+	go amp.readLoop()
+	go amp.writeLoop()
+
+	return amp
 }
 
 type State struct {
@@ -60,18 +68,6 @@ type State struct {
 }
 
 type unmarshaler func(string) error
-
-func ParseBool(str string) (interface{}, error) {
-	b := false
-	err := boolUnmarshaler(&b)(str)
-	return b, err
-}
-
-func ParseInt(str string) (interface{}, error) {
-	i := 0
-	err := intUnmarshaler(&i)(str)
-	return i, err
-}
 
 func intUnmarshaler(receiver *int) unmarshaler {
 	return func(str string) (err error) {
@@ -257,7 +253,7 @@ func (amp *Amplifier) readLoop() {
 	for {
 		line, _, err := amp.reader.ReadLine()
 		if err == nil {
-			amp.readCh <- strings.TrimPrefix(string(line), "#")
+			amp.readCh <- strings.TrimPrefix(strings.TrimSpace(string(line)), "#")
 		} else {
 			break
 		}
@@ -273,31 +269,34 @@ func (amp *Amplifier) writeLoop() {
 			if req != nil {
 				// ignore echos
 				if line == req.cmd {
+					req.echoed = true
 					continue
 				} else if strings.HasPrefix(line, "Command Error") {
 					resp := &writeResponse{err: ErrCommand}
 					req.resp <- resp
-				} else {
+					close(req.resp)
+					req = nil
+				} else if req.echoed {
 					resp := &writeResponse{line: line}
 					req.resp <- resp
+					close(req.resp)
+					req = nil
 				}
-				close(req.resp)
-				req = nil
 			}
 		case req = <-amp.writeCh:
 			amp.writer.Write([]byte(req.cmd))
-			amp.writer.Write([]byte("\r"))
+			amp.writer.Write([]byte("\r\r"))
 		}
 	}
 }
 
 func (amp *Amplifier) write(cmd string) (str string, err error) {
 	resp := make(chan *writeResponse, 1)
-	timeout := 5 * time.Second
+	timeout := 1 * time.Second
 	select {
 	case <-time.After(timeout):
 		err = ErrWriteTimeout
-	case amp.writeCh <- &writeRequest{cmd, resp}:
+	case amp.writeCh <- &writeRequest{cmd: cmd, resp: resp}:
 		select {
 		case <-time.After(timeout):
 			err = ErrReadTimeout
