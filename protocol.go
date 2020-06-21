@@ -60,8 +60,8 @@ type State struct {
 	Mute         bool `json:"mute"`
 	DoNotDisturb bool `json:"do_not_disturb"`
 	Volume       int  `json:"volume"`
-	Treble       int  `json:"balance"`
-	Bass         int  `json:"balance"`
+	Treble       int  `json:"treble"`
+	Bass         int  `json:"bass"`
 	Balance      int  `json:"balance"`
 	Source       int  `json:"source"`
 	KeyPad       bool `json:"keypad"`
@@ -180,7 +180,7 @@ func (amp *Amplifier) State(zone int) (state State, err error) {
 		if len(resp) == 0 {
 			err = ErrInvalidZone
 		} else {
-			state.Unmarshal(resp)
+			err = state.Unmarshal(resp)
 		}
 	}
 	return
@@ -253,7 +253,7 @@ func (amp *Amplifier) readLoop() {
 	for {
 		line, _, err := amp.reader.ReadLine()
 		if err == nil {
-			amp.readCh <- strings.TrimPrefix(strings.TrimSpace(string(line)), "#")
+			amp.readCh <- strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(string(line)), "#"), ">")
 		} else {
 			break
 		}

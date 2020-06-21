@@ -31,7 +31,7 @@ type api struct {
 	zones sync.Map
 }
 
-func New(amp *monoprice.Amplifier) (http.Handler, error) {
+func New(amp *monoprice.Amplifier) (*mux.Router, error) {
 	a := &api{amp: amp}
 
 	zones, err := a.amp.Zones()
