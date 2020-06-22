@@ -262,30 +262,37 @@ func (amp *Amplifier) readLoop() {
 }
 
 func (amp *Amplifier) writeLoop() {
-	var req *writeRequest
+	queue := []*writeRequest{}
 	for {
 		select {
 		case line := <-amp.readCh:
-			if req != nil {
+			if len(queue) > 0 {
 				// ignore echos
-				if line == req.cmd {
-					req.echoed = true
+				if line == queue[0].cmd {
+					queue[0].echoed = true
 					continue
-				} else if strings.HasPrefix(line, "Command Error") {
-					resp := &writeResponse{err: ErrCommand}
-					req.resp <- resp
-					close(req.resp)
-					req = nil
-				} else if req.echoed {
-					resp := &writeResponse{line: line}
-					req.resp <- resp
-					close(req.resp)
-					req = nil
+				} else if queue[0].echoed {
+					if strings.HasPrefix(line, "Command Error") {
+						resp := &writeResponse{err: ErrCommand}
+						queue[0].resp <- resp
+					} else {
+						resp := &writeResponse{line: line}
+						queue[0].resp <- resp
+					}
+					close(queue[0].resp)
+					queue = queue[1:]
+					if len(queue) > 0 {
+						amp.writer.Write([]byte(queue[0].cmd))
+						amp.writer.Write([]byte("\r\r"))
+					}
 				}
 			}
-		case req = <-amp.writeCh:
-			amp.writer.Write([]byte(req.cmd))
-			amp.writer.Write([]byte("\r\r"))
+		case req := <-amp.writeCh:
+			queue = append(queue, req)
+			if len(queue) == 1 {
+				amp.writer.Write([]byte(queue[0].cmd))
+				amp.writer.Write([]byte("\r\r"))
+			}
 		}
 	}
 }

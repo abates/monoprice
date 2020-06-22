@@ -65,6 +65,8 @@ func (a *api) listZones(w http.ResponseWriter, r *http.Request) {
 		return true
 	})
 	sort.Ints(ids)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(ids)
 }
 
@@ -92,7 +94,9 @@ func (a *api) sendCommand(cmd monoprice.Command, v string, decoder func(string) 
 			err = zone.SendCommand(cmd, arg)
 
 			if err == nil {
+				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{}`))
 			} else {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 			}
@@ -105,6 +109,8 @@ func (a *api) sendCommand(cmd monoprice.Command, v string, decoder func(string) 
 func (a *api) status(zone monoprice.Zone, w http.ResponseWriter, r *http.Request) {
 	state, err := zone.State()
 	if err == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(state)
 	} else {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
