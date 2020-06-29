@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -78,9 +79,11 @@ func (a *api) zoneHandler(handler func(monoprice.Zone, http.ResponseWriter, *htt
 			if zone, found := a.zones.Load(id); found {
 				handler(zone.(monoprice.Zone), w, r)
 			} else {
+				log.Printf("Zone %d not found", id)
 				http.Error(w, "Zone not found", http.StatusNotFound)
 			}
 		} else {
+			log.Printf("Failed to convert zone %q to integer: %v", vars["zone"], err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 		}
 	}
@@ -98,9 +101,11 @@ func (a *api) sendCommand(cmd monoprice.Command, v string, decoder func(string) 
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte(`{}`))
 			} else {
+				log.Printf("Failed sending command to amp: %v", err)
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 			}
 		} else {
+			log.Printf("Failed decoding command variable %q: %v", vars[v], err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 		}
 	})
@@ -113,6 +118,7 @@ func (a *api) status(zone monoprice.Zone, w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(state)
 	} else {
+		log.Printf("Failed to determine zone status: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
