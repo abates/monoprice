@@ -251,9 +251,14 @@ func (amp *Amplifier) Zones() ([]Zone, error) {
 
 func (amp *Amplifier) readLoop() {
 	for {
-		line, _, err := amp.reader.ReadLine()
+		data, _, err := amp.reader.ReadLine()
 		if err == nil {
-			amp.readCh <- strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(string(line)), "#"), ">")
+			line := strings.TrimSpace(string(data))
+			line = strings.TrimSuffix(line, "#")
+			line = strings.TrimPrefix(line, "#")
+			line = strings.TrimPrefix(line, ">")
+			amp.readCh <- line
+			//amp.readCh <- strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(string(line)), "#"), ">")
 		} else {
 			break
 		}
