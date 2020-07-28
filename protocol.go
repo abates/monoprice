@@ -329,13 +329,6 @@ func (amp *Amplifier) write(cmd string) (str string, err error) {
 		r := <-resp
 		str = r.line
 		err = r.err
-		/*select {
-		case <-time.After(timeout):
-			err = ErrReadTimeout
-		case r := <-resp:
-			str = r.line
-			err = r.err
-		}*/
 	}
 	return
 }
