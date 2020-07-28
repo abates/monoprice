@@ -267,8 +267,32 @@ func (amp *Amplifier) readLoop() {
 }
 
 func (amp *Amplifier) writeLoop() {
-	queue := []*writeRequest{}
 	var lastWrite time.Time
+	queue := []*writeRequest{}
+	write := func() {
+		time.Sleep(lastWrite.Add(time.Second).Sub(time.Now()))
+		amp.writer.Write([]byte(queue[0].cmd))
+		amp.writer.Write([]byte("\r\r"))
+		lastWrite = time.Now()
+	}
+
+	respond := func(line string, err error) {
+		if err != nil {
+			resp := &writeResponse{err: err}
+			queue[0].resp <- resp
+		} else if strings.HasPrefix(line, "Command Error") {
+			resp := &writeResponse{err: ErrCommand}
+			queue[0].resp <- resp
+		} else {
+			resp := &writeResponse{line: line}
+			queue[0].resp <- resp
+		}
+		close(queue[0].resp)
+		queue = queue[1:]
+		if len(queue) > 0 {
+			write()
+		}
+	}
 
 	for {
 		select {
@@ -279,30 +303,17 @@ func (amp *Amplifier) writeLoop() {
 					queue[0].echoed = true
 					continue
 				} else if queue[0].echoed {
-					if strings.HasPrefix(line, "Command Error") {
-						resp := &writeResponse{err: ErrCommand}
-						queue[0].resp <- resp
-					} else {
-						resp := &writeResponse{line: line}
-						queue[0].resp <- resp
-					}
-					close(queue[0].resp)
-					queue = queue[1:]
-					if len(queue) > 0 {
-						time.Sleep(lastWrite.Add(time.Second).Sub(time.Now()))
-						amp.writer.Write([]byte(queue[0].cmd))
-						amp.writer.Write([]byte("\r\r"))
-						lastWrite = time.Now()
-					}
+					respond(line, nil)
 				}
 			}
 		case req := <-amp.writeCh:
 			queue = append(queue, req)
 			if len(queue) == 1 {
-				time.Sleep(lastWrite.Add(time.Second).Sub(time.Now()))
-				amp.writer.Write([]byte(queue[0].cmd))
-				amp.writer.Write([]byte("\r\r"))
-				lastWrite = time.Now()
+				write()
+			}
+		case <-time.After(time.Second):
+			if len(queue) > 0 && time.Now().After(lastWrite.Add(3*time.Second)) {
+				respond("", ErrReadTimeout)
 			}
 		}
 	}
@@ -315,13 +326,16 @@ func (amp *Amplifier) write(cmd string) (str string, err error) {
 	case <-time.After(timeout):
 		err = ErrWriteTimeout
 	case amp.writeCh <- &writeRequest{cmd: cmd, resp: resp}:
-		select {
+		r := <-resp
+		str = r.line
+		err = r.err
+		/*select {
 		case <-time.After(timeout):
 			err = ErrReadTimeout
 		case r := <-resp:
 			str = r.line
 			err = r.err
-		}
+		}*/
 	}
 	return
 }

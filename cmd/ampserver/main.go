@@ -84,15 +84,15 @@ func server() {
 	c := &serial.Config{Name: port, Baud: speed}
 	s, err := serial.OpenPort(c)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Failed to open serial port: %v", err)
 	}
 
 	amp := monoprice.New(s)
 	router, err := api.New(amp)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Failed to start API server: %v", err)
 	}
-
+	log.Printf("API Server started, listening on port %d", listenPort)
 	router.Use(authMiddleware(apiKey))
 
 	srv := &http.Server{
