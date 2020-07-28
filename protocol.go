@@ -268,6 +268,8 @@ func (amp *Amplifier) readLoop() {
 
 func (amp *Amplifier) writeLoop() {
 	queue := []*writeRequest{}
+	var lastWrite time.Time
+
 	for {
 		select {
 		case line := <-amp.readCh:
@@ -287,16 +289,20 @@ func (amp *Amplifier) writeLoop() {
 					close(queue[0].resp)
 					queue = queue[1:]
 					if len(queue) > 0 {
+						time.Sleep(lastWrite.Add(time.Second).Sub(time.Now()))
 						amp.writer.Write([]byte(queue[0].cmd))
 						amp.writer.Write([]byte("\r\r"))
+						lastWrite = time.Now()
 					}
 				}
 			}
 		case req := <-amp.writeCh:
 			queue = append(queue, req)
 			if len(queue) == 1 {
+				time.Sleep(lastWrite.Add(time.Second).Sub(time.Now()))
 				amp.writer.Write([]byte(queue[0].cmd))
 				amp.writer.Write([]byte("\r\r"))
+				lastWrite = time.Now()
 			}
 		}
 	}
