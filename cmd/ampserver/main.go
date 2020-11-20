@@ -105,7 +105,7 @@ func server() {
 		log.Fatalf("Failed to start API server: %v", err)
 	}
 	log.Printf("API Server started, listening on port %d", listenPort)
-	router.Use(authMiddleware(apiKey))
+	//router.Use(authMiddleware(apiKey))
 
 	srv := &http.Server{
 		Handler:      router,

@@ -310,18 +310,19 @@ func (amp *Amplifier) readLoop(respCh chan<- *cmdResp) {
 		}
 
 		line = strings.TrimPrefix(line, "#")
-		if strings.HasPrefix(line, ">") {
+		if strings.HasPrefix(line, ">") || strings.HasPrefix(line, "<") {
 			// query response
+			line = line[1:]
 			resp := &cmdResp{}
-			line = strings.TrimPrefix(line, ">")
 			err := resp.Unmarshal(line)
 			if err == nil {
+				lastCmd = resp.cmd
 				respCh <- resp
 			} else {
 				log.Printf("Failed to parse response %q: %v", line, err)
 			}
-		} else if strings.HasPrefix(line, "?") || strings.HasPrefix(line, "!") {
-			// query echo or command echo
+		} else if strings.HasPrefix(line, "?") {
+			// query echo
 			lastCmd = Command(line[1:3])
 		} else if line == "Command Error." {
 			respCh <- &cmdResp{cmd: lastCmd, err: ErrCommand}
@@ -377,7 +378,7 @@ func (amp *Amplifier) sendQuery(zone int, cmd Command) (string, error) {
 }
 
 func (amp *Amplifier) sendCmd(zone int, cmd Command, arg string) (string, error) {
-	return amp.write(zone, "!", cmd, arg)
+	return amp.write(zone, "<", cmd, arg)
 }
 
 func (amp *Amplifier) write(zone int, typ string, cmd Command, arg string) (str string, err error) {
@@ -393,8 +394,8 @@ func (amp *Amplifier) write(zone int, typ string, cmd Command, arg string) (str 
 		cmd = ""
 	}
 
-	if len(arg) > 0 {
-		amp.writeCh <- fmt.Sprintf("%s%d%s", typ, zone, arg)
+	if len(arg) == 0 {
+		amp.writeCh <- fmt.Sprintf("%s%d%s", typ, zone, cmd)
 	} else {
 		amp.writeCh <- fmt.Sprintf("%s%d%s%s", typ, zone, cmd, arg)
 	}
