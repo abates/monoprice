@@ -5,50 +5,72 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"strconv"
 	"strings"
 	"time"
 )
 
 var (
-	ErrTooLong      = errors.New("String is too long")
-	ErrReadTimeout  = errors.New("Read Timeout")
-	ErrWriteTimeout = errors.New("Write Timeout")
-	ErrInvalidZone  = errors.New("Invalid Zone ID")
-	ErrCommand      = errors.New("Invalid Command")
+	ErrTooLong     = errors.New("String is too long")
+	ErrReadTimeout = errors.New("Read Timeout")
+	ErrInvalidZone = errors.New("Invalid Zone ID")
+	ErrCommand     = errors.New("Invalid Command")
+
+	Timeout = time.Second
 )
 
-type writeResponse struct {
-	line string
-	err  error
+type cmdResp struct {
+	zone  int
+	cmd   Command
+	value string
+	err   error
 }
 
-type writeRequest struct {
-	cmd    string
-	echoed bool
-	resp   chan *writeResponse
+func (cr *cmdResp) Unmarshal(line string) (err error) {
+	cr.zone, err = strconv.Atoi(line[0:2])
+	if err != nil {
+		return err
+	}
+
+	line = line[2:]
+	cr.cmd = Command(line[0:2])
+	cr.value = line[2:]
+	if _, found := commands[cr.cmd]; !found {
+		cr.cmd = ST
+		cr.value = line
+	}
+	return nil
+}
+
+type subscription struct {
+	unsubscribe bool
+	zone        int
+	cmd         Command
+	ch          chan<- *cmdResp
 }
 
 type Amplifier struct {
-	writer io.Writer
-	reader *bufio.Reader
-
-	readCh  chan string
-	writeCh chan *writeRequest
-
-	zones []Zone
+	writer      io.Writer
+	reader      *bufio.Reader
+	writeCh     chan<- string
+	subscribeCh chan<- *subscription
+	zones       []Zone
 }
 
 func New(port io.ReadWriter) *Amplifier {
+	writeCh := make(chan string)
+	subscribeCh := make(chan *subscription)
 	amp := &Amplifier{
-		writer:  port,
-		reader:  bufio.NewReader(port),
-		readCh:  make(chan string, 1),
-		writeCh: make(chan *writeRequest, 1),
+		writer:      port,
+		reader:      bufio.NewReader(port),
+		writeCh:     writeCh,
+		subscribeCh: subscribeCh,
 	}
 
-	go amp.readLoop()
-	go amp.writeLoop()
+	cmdRespCh := make(chan *cmdResp)
+	go amp.readLoop(cmdRespCh)
+	go amp.writeLoop(cmdRespCh, subscribeCh, writeCh)
 
 	return amp
 }
@@ -175,13 +197,11 @@ func (z *zone) ID() int {
 }
 
 func (amp *Amplifier) State(zone int) (state State, err error) {
-	resp, err := amp.write(fmt.Sprintf("?%d", zone))
+	resp, err := amp.sendQuery(zone, ST)
 	if err == nil {
-		if len(resp) == 0 {
-			err = ErrInvalidZone
-		} else {
-			err = state.Unmarshal(resp)
-		}
+		state.Unmarshal(resp)
+	} else if err == ErrReadTimeout {
+		err = ErrInvalidZone
 	}
 	return
 }
@@ -191,24 +211,43 @@ func (z *zone) State() (state State, err error) {
 }
 
 func (z *zone) SendCommand(cmd Command, arg interface{}) error {
-	_, err := z.amp.write(fmt.Sprintf("<%d%s", z.id, cmd.format(arg)))
+	_, err := z.amp.sendCmd(z.id, cmd, cmd.format(arg))
 	return err
 }
 
 type Command string
 
 func (c Command) format(v interface{}) string {
-	return fmt.Sprintf(string(c), v)
+	return fmt.Sprintf(commands[c], v)
 }
 
 var (
-	SetPower   Command = "PR%s"
-	SetMute    Command = "MU%s"
-	SetVolume  Command = "VO%02d"
-	SetTreble  Command = "TR%02d"
-	SetBass    Command = "BS%02d"
-	SetBalance Command = "BL%02d"
-	SetSource  Command = "CH%02d"
+	// Inquiries
+	PA              Command = "PA"
+	SetPower        Command = "PR"
+	SetMute         Command = "MU"
+	SetDND          Command = "DT"
+	SetVolume       Command = "VO"
+	SetTreble       Command = "TR"
+	SetBass         Command = "BS"
+	SetBalance      Command = "BL"
+	SetSource       Command = "CH"
+	GetKeypadStatus Command = "LS"
+	ST              Command = "ST" // State is a pseudo command used only for conveying complete state in this API
+
+	commands = map[Command]string{
+		PA:              "",
+		SetPower:        "%s",
+		SetMute:         "%s",
+		SetDND:          "%02d",
+		SetVolume:       "%02d",
+		SetTreble:       "%02d",
+		SetBass:         "%02d",
+		SetBalance:      "%02d",
+		SetSource:       "%02d",
+		GetKeypadStatus: "",
+		ST:              "",
+	}
 )
 
 func (z *zone) Restore(state State) (err error) {
@@ -249,86 +288,126 @@ func (amp *Amplifier) Zones() ([]Zone, error) {
 	return amp.zones, nil
 }
 
-func (amp *Amplifier) readLoop() {
-	for {
-		data, _, err := amp.reader.ReadLine()
-		if err == nil {
-			line := strings.TrimSpace(string(data))
-			line = strings.TrimSuffix(line, "#")
-			line = strings.TrimPrefix(line, "#")
-			line = strings.TrimPrefix(line, ">")
-			amp.readCh <- line
-			//amp.readCh <- strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(string(line)), "#"), ">")
-		} else {
-			break
-		}
+func (amp *Amplifier) readLine() (line string, err error) {
+	data, err := amp.reader.ReadBytes('\n')
+	if err == nil {
+		line = strings.TrimSpace(string(data))
 	}
-	close(amp.readCh)
+	return
 }
 
-func (amp *Amplifier) writeLoop() {
-	var lastWrite time.Time
-	queue := []*writeRequest{}
-	write := func() {
-		time.Sleep(lastWrite.Add(time.Second).Sub(time.Now()))
-		amp.writer.Write([]byte(queue[0].cmd))
-		amp.writer.Write([]byte("\r\r"))
-		lastWrite = time.Now()
-	}
+func (amp *Amplifier) readLoop(respCh chan<- *cmdResp) {
+	defer func() {
+		close(respCh)
+	}()
 
-	respond := func(line string, err error) {
+	lastCmd := Command("")
+	for {
+		line, err := amp.readLine()
 		if err != nil {
-			resp := &writeResponse{err: err}
-			queue[0].resp <- resp
-		} else if strings.HasPrefix(line, "Command Error") {
-			resp := &writeResponse{err: ErrCommand}
-			queue[0].resp <- resp
-		} else {
-			resp := &writeResponse{line: line}
-			queue[0].resp <- resp
+			log.Printf("Failed to read line: %v", err)
+			return
 		}
-		close(queue[0].resp)
-		queue = queue[1:]
-		if len(queue) > 0 {
-			write()
+
+		line = strings.TrimPrefix(line, "#")
+		if strings.HasPrefix(line, ">") {
+			// query response
+			resp := &cmdResp{}
+			line = strings.TrimPrefix(line, ">")
+			err := resp.Unmarshal(line)
+			if err == nil {
+				respCh <- resp
+			} else {
+				log.Printf("Failed to parse response %q: %v", line, err)
+			}
+		} else if strings.HasPrefix(line, "?") || strings.HasPrefix(line, "!") {
+			// query echo or command echo
+			lastCmd = Command(line[1:3])
+		} else if line == "Command Error." {
+			respCh <- &cmdResp{cmd: lastCmd, err: ErrCommand}
+		} else if len(line) > 0 {
+			log.Printf("Unknown line format for %q", line)
 		}
 	}
+}
 
+func (amp *Amplifier) writeLoop(respCh <-chan *cmdResp, subscribeCh <-chan *subscription, writeCh <-chan string) {
+	listeners := make(map[int]map[Command]map[chan<- *cmdResp]interface{})
 	for {
 		select {
-		case line := <-amp.readCh:
-			if len(queue) > 0 {
-				// ignore echos
-				if line == queue[0].cmd {
-					queue[0].echoed = true
-					continue
-				} else if queue[0].echoed {
-					respond(line, nil)
+		case req := <-subscribeCh:
+			zone, found := listeners[req.zone]
+			if !found {
+				zone = make(map[Command]map[chan<- *cmdResp]interface{})
+				listeners[req.zone] = zone
+			}
+			zl, found := zone[req.cmd]
+			if !found {
+				zl = make(map[chan<- *cmdResp]interface{})
+				zone[req.cmd] = zl
+			}
+			if req.unsubscribe {
+				close(req.ch)
+				delete(zl, req.ch)
+			} else {
+				zl[req.ch] = nil
+			}
+		case resp := <-respCh:
+			if zone, found := listeners[resp.zone]; found {
+				if zl, found := zone[resp.cmd]; found {
+					for ch := range zl {
+						select {
+						case ch <- resp:
+						default:
+							close(ch)
+							delete(zl, ch)
+						}
+					}
 				}
 			}
-		case req := <-amp.writeCh:
-			queue = append(queue, req)
-			if len(queue) == 1 {
-				write()
-			}
-		case <-time.After(time.Second):
-			if len(queue) > 0 && time.Now().After(lastWrite.Add(3*time.Second)) {
-				respond("", ErrReadTimeout)
-			}
+		case cmd := <-writeCh:
+			amp.writer.Write([]byte(cmd))
+			amp.writer.Write([]byte("\r"))
 		}
 	}
 }
 
-func (amp *Amplifier) write(cmd string) (str string, err error) {
-	resp := make(chan *writeResponse, 1)
-	timeout := 1 * time.Second
-	select {
-	case <-time.After(timeout):
-		err = ErrWriteTimeout
-	case amp.writeCh <- &writeRequest{cmd: cmd, resp: resp}:
-		r := <-resp
-		str = r.line
-		err = r.err
+func (amp *Amplifier) sendQuery(zone int, cmd Command) (string, error) {
+	return amp.write(zone, "?", cmd, "")
+}
+
+func (amp *Amplifier) sendCmd(zone int, cmd Command, arg string) (string, error) {
+	return amp.write(zone, "!", cmd, arg)
+}
+
+func (amp *Amplifier) write(zone int, typ string, cmd Command, arg string) (str string, err error) {
+	ch := make(chan *cmdResp, 1)
+	req := &subscription{
+		zone: zone,
+		cmd:  cmd,
+		ch:   ch,
 	}
+	amp.subscribeCh <- req
+
+	if cmd == ST {
+		cmd = ""
+	}
+
+	if len(arg) > 0 {
+		amp.writeCh <- fmt.Sprintf("%s%d%s", typ, zone, arg)
+	} else {
+		amp.writeCh <- fmt.Sprintf("%s%d%s%s", typ, zone, cmd, arg)
+	}
+
+	select {
+	case <-time.After(Timeout):
+		err = ErrReadTimeout
+	case resp := <-ch:
+		str = resp.value
+		err = resp.err
+	}
+
+	req.unsubscribe = true
+	amp.subscribeCh <- req
 	return
 }
