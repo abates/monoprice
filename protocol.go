@@ -35,10 +35,11 @@ func (cr *cmdResp) Unmarshal(line string) (err error) {
 
 	line = line[2:]
 	cr.cmd = Command(line[0:2])
-	cr.value = line[2:]
 	if _, found := commands[cr.cmd]; !found {
 		cr.cmd = ST
 		cr.value = line
+	} else {
+		cr.value = line[2:]
 	}
 	return nil
 }
@@ -76,7 +77,6 @@ func New(port io.ReadWriter) *Amplifier {
 }
 
 type State struct {
-	Zone         int  `json:"zone"`
 	PA           bool `json:"pa"`
 	Power        bool `json:"power"`
 	Mute         bool `json:"mute"`
@@ -110,7 +110,6 @@ func boolUnmarshaler(receiver *bool) unmarshaler {
 
 func (state *State) Unmarshal(str string) (err error) {
 	unmarshalers := []unmarshaler{
-		intUnmarshaler(&state.Zone),
 		boolUnmarshaler(&state.PA),
 		boolUnmarshaler(&state.Power),
 		boolUnmarshaler(&state.Mute),
@@ -161,7 +160,6 @@ func boolMarshaler(value bool) marshaler {
 
 func (state *State) Marshal() (string, error) {
 	marshalers := []marshaler{
-		intMarshaler(state.Zone),
 		boolMarshaler(state.PA),
 		boolMarshaler(state.Power),
 		boolMarshaler(state.Mute),
@@ -199,7 +197,7 @@ func (z *zone) ID() int {
 func (amp *Amplifier) State(zone int) (state State, err error) {
 	resp, err := amp.sendQuery(zone, ST)
 	if err == nil {
-		state.Unmarshal(resp)
+		err = state.Unmarshal(resp)
 	} else if err == ErrReadTimeout {
 		err = ErrInvalidZone
 	}
