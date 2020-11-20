@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"github.com/tarm/serial"
 )
 
+var disableAuth bool
 var apiKey string
 
 func getEnv(key, fallback string) string {
@@ -37,10 +39,19 @@ func getIntEnv(key string, fallback int) int {
 	return v
 }
 
+func usage() {
+	fmt.Fprintf(os.Stderr, "Usage: %s <flags> [server|keygen]\n", filepath.Base(os.Args[0]))
+	flag.PrintDefaults()
+}
+
 func main() {
+	flag.BoolVar(&disableAuth, "noauth", false, "disable authentication middleware (useful for testing)")
+	flag.Usage = usage
+	flag.Parse()
+
 	cmd := ""
-	if len(os.Args) > 1 {
-		cmd = os.Args[1]
+	if len(flag.Args()) > 0 {
+		cmd = flag.Args()[0]
 	}
 
 	switch cmd {
@@ -49,7 +60,8 @@ func main() {
 	case "keygen":
 		keygen()
 	default:
-		log.Fatalf("Usage: %s [server|keygen]", filepath.Base(os.Args[0]))
+		usage()
+		os.Exit(-1)
 	}
 }
 
@@ -74,7 +86,7 @@ func authMiddleware(apiKey string) mux.MiddlewareFunc {
 
 func server() {
 	apiKey = getEnv("API_KEY", "")
-	if len(apiKey) == 0 {
+	if len(apiKey) == 0 && !disableAuth {
 		log.Fatal("ampserver requires an API_KEY environment variable.")
 	}
 
@@ -105,7 +117,9 @@ func server() {
 		log.Fatalf("Failed to start API server: %v", err)
 	}
 	log.Printf("API Server started, listening on port %d", listenPort)
-	//router.Use(authMiddleware(apiKey))
+	if !disableAuth {
+		router.Use(authMiddleware(apiKey))
+	}
 
 	srv := &http.Server{
 		Handler:      router,
