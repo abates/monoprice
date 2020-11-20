@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/abates/monoprice"
@@ -88,6 +89,17 @@ func server() {
 	}
 
 	amp := monoprice.New(s)
+	zones := []string{}
+	z, err := amp.Zones()
+	if err != nil {
+		log.Fatalf("Failed to determine zones from amplifier: %v", err)
+	}
+
+	for _, zone := range z {
+		zones = append(zones, fmt.Sprintf("%d", zone.ID()))
+	}
+	log.Printf("Connected to amplifier, found zones %s", strings.Join(zones, ","))
+
 	router, err := api.New(amp)
 	if err != nil {
 		log.Fatalf("Failed to start API server: %v", err)
