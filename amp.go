@@ -63,6 +63,7 @@ func (amp *Amplifier) Zones() (zones []Zone) {
 }
 
 func (amp *Amplifier) initZones() error {
+	log.Printf("Initializing amplifier zones")
 	amp.zones = []Zone{}
 	for i := 1; i < 4; i++ {
 		for j := 1; j < 7; j++ {
@@ -70,7 +71,10 @@ func (amp *Amplifier) initZones() error {
 			_, err := amp.State(id)
 			if err == nil {
 				amp.zones = append(amp.zones, newZone(id, amp))
-			} else if err != ErrInvalidZone {
+				log.Printf("Found Zone %d", id)
+			} else if err == ErrInvalidZone {
+				log.Printf("Zone %d is not attached", id)
+			} else {
 				return err
 			}
 		}
