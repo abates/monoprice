@@ -18,6 +18,7 @@ import (
 	"github.com/tarm/serial"
 )
 
+var verbose bool
 var disableAuth bool
 var apiKey string
 
@@ -45,6 +46,7 @@ func usage() {
 }
 
 func main() {
+	flag.BoolVar(&verbose, "verbose", false, "verbose logging")
 	flag.BoolVar(&disableAuth, "noauth", false, "disable authentication middleware (useful for testing)")
 	flag.Usage = usage
 	flag.Parse()
@@ -94,28 +96,31 @@ func server() {
 	speed := getIntEnv("AMP_SPEED", 9600)
 	listenPort := getIntEnv("LISTEN_PORT", 8000)
 
-	c := &serial.Config{Name: port, Baud: speed}
+	c := &serial.Config{Name: port, Baud: speed, ReadTimeout: time.Second}
 	s, err := serial.OpenPort(c)
 	if err != nil {
 		log.Fatalf("Failed to open serial port: %v", err)
 	}
 
-	amp := monoprice.New(s)
-	zones := []string{}
-	z, err := amp.Zones()
-	if err != nil {
-		log.Fatalf("Failed to determine zones from amplifier: %v", err)
+	options := []monoprice.Option{}
+	if verbose {
+		options = append(options, monoprice.VerboseOption())
 	}
+
+	amp, err := monoprice.New(s, options...)
+	if err != nil {
+		log.Fatalf("Failed to initialize amplifier: %v", err)
+	}
+
+	zones := []string{}
+	z := amp.Zones()
 
 	for _, zone := range z {
 		zones = append(zones, fmt.Sprintf("%d", zone.ID()))
 	}
 	log.Printf("Connected to amplifier, found zones %s", strings.Join(zones, ","))
 
-	router, err := api.New(amp)
-	if err != nil {
-		log.Fatalf("Failed to start API server: %v", err)
-	}
+	router := api.New(amp)
 	log.Printf("API Server started, listening on port %d", listenPort)
 	if !disableAuth {
 		router.Use(authMiddleware(apiKey))

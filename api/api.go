@@ -32,15 +32,10 @@ type api struct {
 	zones sync.Map
 }
 
-func New(amp *monoprice.Amplifier) (*mux.Router, error) {
+func New(amp *monoprice.Amplifier) *mux.Router {
 	a := &api{amp: amp}
 
-	zones, err := a.amp.Zones()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, zone := range zones {
+	for _, zone := range a.amp.Zones() {
 		a.zones.Store(zone.ID(), zone)
 	}
 
@@ -56,7 +51,7 @@ func New(amp *monoprice.Amplifier) (*mux.Router, error) {
 	r.HandleFunc("/{zone}/source/{source}", a.sendCommand(monoprice.SetSource, "source", ParseInt)).Methods("PUT")
 	r.HandleFunc("/{zone}/restore", a.zoneHandler(a.restore)).Methods("PUT")
 
-	return r, nil
+	return r
 }
 
 func (a *api) listZones(w http.ResponseWriter, r *http.Request) {

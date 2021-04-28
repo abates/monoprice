@@ -7,25 +7,30 @@ import (
 	"io"
 	"log"
 	"strings"
-	"time"
 )
 
 var (
-	ErrReadTimeout = errors.New("Read Timeout")
 	ErrInvalidZone = errors.New("Invalid Zone ID")
 	ErrCommand     = errors.New("Invalid Command")
-
-	Timeout = time.Second
 )
 
 type Amplifier struct {
-	writer  io.Writer
-	reader  *bufio.Reader
-	writeCh chan<- cmdReq
-	zones   map[ZoneID]*zone
+	writer     io.Writer
+	reader     *bufio.Reader
+	writeCh    chan<- cmdReq
+	zones      map[ZoneID]*zone
+	verboseLog bool
 }
 
-func New(port io.ReadWriter) (*Amplifier, error) {
+type Option func(*Amplifier)
+
+func VerboseOption() Option {
+	return func(amp *Amplifier) {
+		amp.verboseLog = true
+	}
+}
+
+func New(port io.ReadWriter, options ...Option) (*Amplifier, error) {
 	writeCh := make(chan cmdReq)
 	amp := &Amplifier{
 		writer:  port,
@@ -33,7 +38,10 @@ func New(port io.ReadWriter) (*Amplifier, error) {
 		writeCh: writeCh,
 	}
 
-	//go amp.readLoop()
+	for _, option := range options {
+		option(amp)
+	}
+
 	go amp.writeLoop(writeCh)
 
 	err := amp.initZones()
@@ -44,7 +52,7 @@ func (amp *Amplifier) State(zone ZoneID) (state State, err error) {
 	resp, err := amp.sendQuery(zone, ST)
 	if err == nil {
 		err = state.Unmarshal(resp)
-	} else if err == ErrReadTimeout {
+	} else if err == io.EOF {
 		err = ErrInvalidZone
 	}
 	return
@@ -85,19 +93,28 @@ func (amp *Amplifier) writeLoop(writeCh <-chan cmdReq) {
 	for req := range writeCh {
 		amp.writer.Write([]byte(req.cmd))
 		amp.writer.Write([]byte("\r"))
+		if amp.verboseLog {
+			log.Printf("TX %s", req.cmd)
+		}
 		// wait for command to be echoed back
 		for {
 			line, err := amp.readLine()
 			if err != nil {
-				log.Fatalf("Failed to read: %v", err)
+				req.resp <- cmdResp{err: err}
+				break
 			}
+
+			if amp.verboseLog {
+				log.Printf("RX %s", line)
+			}
+			line = strings.TrimPrefix(line, "#")
 
 			if req.cmd[0:1] == "<" && line == req.cmd {
 				resp := cmdResp{}
 				resp.err = resp.Unmarshal(line[1:])
 				req.resp <- resp
 				break
-			} else if req.cmd[0:1] == "?" && line[1:2] == ">" {
+			} else if req.cmd[0:1] == "?" && line[0:1] == ">" {
 				resp := cmdResp{}
 				resp.err = resp.Unmarshal(line[1:])
 				req.resp <- resp
