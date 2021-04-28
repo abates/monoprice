@@ -43,7 +43,7 @@ curl localhost:8000/11/status
 ```
 
 Send command:
-`sh
+```sh
 curl -X PUT localhost:8000/11/power/false
 {}
-`
+```
