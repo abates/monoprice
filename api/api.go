@@ -57,7 +57,7 @@ func New(amp *monoprice.Amplifier) *mux.Router {
 func (a *api) listZones(w http.ResponseWriter, r *http.Request) {
 	ids := []int{}
 	a.zones.Range(func(key, value interface{}) bool {
-		ids = append(ids, key.(int))
+		ids = append(ids, int(key.(monoprice.ZoneID)))
 		return true
 	})
 	sort.Ints(ids)
