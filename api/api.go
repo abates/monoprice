@@ -71,7 +71,7 @@ func (a *api) zoneHandler(handler func(monoprice.Zone, http.ResponseWriter, *htt
 		vars := mux.Vars(r)
 		id, err := strconv.Atoi(vars["zone"])
 		if err == nil {
-			if zone, found := a.zones.Load(id); found {
+			if zone, found := a.zones.Load(monoprice.ZoneID(id)); found {
 				handler(zone.(monoprice.Zone), w, r)
 			} else {
 				log.Printf("Zone %d not found", id)

@@ -18,7 +18,7 @@ type Amplifier struct {
 	writer     io.Writer
 	reader     *bufio.Reader
 	writeCh    chan<- cmdReq
-	zones      map[ZoneID]*zone
+	zones      []Zone
 	verboseLog bool
 }
 
@@ -59,20 +59,17 @@ func (amp *Amplifier) State(zone ZoneID) (state State, err error) {
 }
 
 func (amp *Amplifier) Zones() (zones []Zone) {
-	for _, zone := range amp.zones {
-		zones = append(zones, zone)
-	}
-	return zones
+	return amp.zones
 }
 
 func (amp *Amplifier) initZones() error {
-	amp.zones = make(map[ZoneID]*zone)
+	amp.zones = []Zone{}
 	for i := 1; i < 4; i++ {
 		for j := 1; j < 7; j++ {
 			id := ZoneID(10*i + j)
 			_, err := amp.State(id)
 			if err == nil {
-				amp.zones[id] = newZone(id, amp)
+				amp.zones = append(amp.zones, newZone(id, amp))
 			} else if err != ErrInvalidZone {
 				return err
 			}
