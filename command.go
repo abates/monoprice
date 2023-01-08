@@ -18,6 +18,10 @@ type cmdResp struct {
 }
 
 func (cr *cmdResp) Unmarshal(line string) (err error) {
+	if len(line) < 2 {
+		return ErrInvalidResponse
+	}
+
 	zone, err := strconv.Atoi(line[0:2])
 	if err != nil {
 		return err

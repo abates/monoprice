@@ -1,5 +1,7 @@
 package monoprice
 
+import "errors"
+
 type ZoneID int
 
 type Zone interface {
@@ -27,7 +29,16 @@ func (z *zone) ID() ZoneID {
 }
 
 func (z *zone) State() (state State, err error) {
-	return z.amp.State(z.id)
+	for i := 0; i < QueryRetryLimit; i++ {
+		state, err = z.amp.State(z.id)
+		if err == nil || !errors.Is(ErrInvalidZone, err) {
+			break
+		}
+	}
+	if errors.Is(ErrInvalidZone, err) {
+		err = ErrUnknownState
+	}
+	return
 }
 
 func (z *zone) SendCommand(cmd Command, arg interface{}) error {

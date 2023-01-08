@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"sort"
@@ -108,9 +109,13 @@ func (a *api) sendCommand(cmd monoprice.Command, v string, decoder func(string) 
 
 func (a *api) status(zone monoprice.Zone, w http.ResponseWriter, r *http.Request) {
 	state, err := zone.State()
-	if err == nil {
+	if err == nil || errors.Is(monoprice.ErrUnknownState, err) {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
+		status := http.StatusOK
+		if err != nil {
+			status = http.StatusServiceUnavailable
+		}
+		w.WriteHeader(status)
 		json.NewEncoder(w).Encode(state)
 	} else {
 		log.Printf("Failed to determine zone status: %v", err)

@@ -10,8 +10,13 @@ import (
 )
 
 var (
-	ErrInvalidZone = errors.New("Invalid Zone ID")
-	ErrCommand     = errors.New("Invalid Command")
+	ErrInvalidZone     = errors.New("invalid Zone ID")
+	ErrUnknownState    = errors.New("failed to determine state")
+	ErrCommand         = errors.New("invalid Command")
+	ErrInvalidResponse = errors.New("invalid response")
+	ErrRetryTimeout    = errors.New("retries exceeded")
+
+	QueryRetryLimit = 3
 )
 
 type Amplifier struct {
@@ -85,43 +90,68 @@ func (amp *Amplifier) initZones() error {
 func (amp *Amplifier) readLine() (line string, err error) {
 	data, err := amp.reader.ReadBytes('\n')
 	if err == nil {
-		line = strings.TrimSpace(string(data))
+		if amp.verboseLog {
+			log.Printf("RX %s", string(data))
+		}
+		line = strings.TrimPrefix(strings.TrimSpace(string(data)), "#")
+	} else if amp.verboseLog {
+		log.Printf("RX Error: %v", err)
 	}
-	return
+	return line, err
 }
 
-func (amp *Amplifier) writeLoop(writeCh <-chan cmdReq) {
-	for req := range writeCh {
+func (amp *Amplifier) writeCommand(req *cmdReq) {
+	maxTries := 3
+	resp := cmdResp{}
+	line := ""
+	for tries := 0; tries < maxTries; tries++ {
 		amp.writer.Write([]byte(req.cmd))
 		amp.writer.Write([]byte("\r"))
 		if amp.verboseLog {
 			log.Printf("TX %s", req.cmd)
 		}
+
 		// wait for command to be echoed back
-		for {
-			line, err := amp.readLine()
-			if err != nil {
-				req.resp <- cmdResp{err: err}
-				break
-			}
-
-			if amp.verboseLog {
-				log.Printf("RX %s", line)
-			}
-			line = strings.TrimPrefix(line, "#")
-
-			if req.cmd[0:1] == "<" && line == req.cmd {
-				resp := cmdResp{}
-				resp.err = resp.Unmarshal(line[1:])
-				req.resp <- resp
-				break
-			} else if req.cmd[0:1] == "?" && line[0:1] == ">" {
-				resp := cmdResp{}
-				resp.err = resp.Unmarshal(line[1:])
-				req.resp <- resp
-				break
-			}
+		line, resp.err = amp.readLine()
+		if resp.err != nil {
+			break
 		}
+		if line != req.cmd {
+			resp.err = ErrInvalidResponse
+			break
+		}
+
+		line, resp.err = amp.readLine()
+		if resp.err != nil {
+			break
+		}
+
+		if line == "" {
+			if amp.verboseLog {
+				log.Printf("Empty response received, re-sending command")
+			}
+			continue
+		}
+
+		if req.cmd[0:1] == "<" && resp.value == req.cmd {
+			resp.err = resp.Unmarshal(line[1:])
+			break
+		}
+
+		if req.cmd[0:1] == "?" && line[0:1] == ">" {
+			resp.err = resp.Unmarshal(line[1:])
+			break
+		}
+
+		resp.err = ErrRetryTimeout
+	}
+
+	req.resp <- resp
+}
+
+func (amp *Amplifier) writeLoop(writeCh <-chan cmdReq) {
+	for req := range writeCh {
+		amp.writeCommand(&req)
 	}
 }
 
