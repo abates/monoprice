@@ -4,15 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 )
 
-var (
-	ErrTooLong = errors.New("String is too long")
-)
-
 type State struct {
+	Zone         int  `json:"zone"`
 	PA           bool `json:"pa"`
 	Power        bool `json:"power"`
 	Mute         bool `json:"mute"`
@@ -25,27 +21,9 @@ type State struct {
 	KeyPad       bool `json:"keypad"`
 }
 
-type unmarshaler func(string) error
-
-func intUnmarshaler(receiver *int) unmarshaler {
-	return func(str string) (err error) {
-		*receiver, err = strconv.Atoi(str)
-		return err
-	}
-}
-
-func boolUnmarshaler(receiver *bool) unmarshaler {
-	return func(str string) (err error) {
-		if str[0:1] != "0" {
-			return strconv.ErrSyntax
-		}
-		*receiver, err = strconv.ParseBool(str[1:])
-		return err
-	}
-}
-
 func (state *State) Unmarshal(str string) (err error) {
 	unmarshalers := []unmarshaler{
+		intUnmarshaler(&state.Zone),
 		boolUnmarshaler(&state.PA),
 		boolUnmarshaler(&state.Power),
 		boolUnmarshaler(&state.Mute),
@@ -62,7 +40,7 @@ func (state *State) Unmarshal(str string) (err error) {
 		if len(str) < 2 {
 			err = io.ErrUnexpectedEOF
 		} else if len(unmarshalers) == 0 {
-			err = ErrTooLong
+			err = fmt.Errorf("%w trailing %q", ErrTooLong, str)
 		} else {
 			err = unmarshalers[0](str[0:2])
 			if err == nil {
@@ -77,25 +55,9 @@ func (state *State) Unmarshal(str string) (err error) {
 	return err
 }
 
-type marshaler func() string
-
-func intMarshaler(value int) marshaler {
-	return func() string {
-		return fmt.Sprintf("%02d", value)
-	}
-}
-
-func boolMarshaler(value bool) marshaler {
-	return func() string {
-		if value {
-			return fmt.Sprintf("01")
-		}
-		return fmt.Sprintf("00")
-	}
-}
-
 func (state *State) Marshal() (string, error) {
 	marshalers := []marshaler{
+		intMarshaler(state.Zone),
 		boolMarshaler(state.PA),
 		boolMarshaler(state.Power),
 		boolMarshaler(state.Mute),
@@ -113,4 +75,53 @@ func (state *State) Marshal() (string, error) {
 		builder.WriteString(marshaler())
 	}
 	return builder.String(), nil
+}
+
+type ampReader interface {
+	readResponse() (string, error)
+}
+
+type Response interface {
+	Read(ampReader) error
+	EchoString() string
+}
+
+type EchoResponse struct {
+	Echo string
+}
+
+func (er *EchoResponse) Read(reader ampReader) (err error) {
+	er.Echo, err = reader.readResponse()
+	if err == nil {
+		er.Echo = strings.TrimRight(er.Echo, "#")
+	}
+	return err
+}
+
+func (er *EchoResponse) EchoString() string {
+	return er.Echo
+}
+
+type QueryResponse struct {
+	EchoResponse
+	State State
+}
+
+func (qr *QueryResponse) Read(reader ampReader) error {
+	err := qr.EchoResponse.Read(reader)
+	stateString := ""
+	if err == nil {
+		stateString, err = reader.readResponse()
+		if err == nil {
+			if len(stateString) > 0 && stateString[0] == '>' {
+				stateString = strings.TrimSpace(strings.TrimRight(stateString, "#"))
+				err = qr.State.Unmarshal(stateString[1:])
+			} else {
+				err = fmt.Errorf("%w received %q", ErrInvalidResponse, stateString)
+			}
+		} else if errors.Is(err, io.EOF) {
+			err = ErrInvalidZone
+		}
+	}
+	return err
 }

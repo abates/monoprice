@@ -30,7 +30,7 @@ func (z *zone) ID() ZoneID {
 
 func (z *zone) State() (state State, err error) {
 	for i := 0; i < QueryRetryLimit; i++ {
-		state, err = z.amp.State(z.id)
+		state, err = z.amp.QueryState(z.id)
 		if err == nil || !errors.Is(ErrInvalidZone, err) {
 			break
 		}
@@ -42,8 +42,7 @@ func (z *zone) State() (state State, err error) {
 }
 
 func (z *zone) SendCommand(cmd Command, arg interface{}) error {
-	_, err := z.amp.sendCmd(z.id, cmd, cmd.format(arg))
-	return err
+	return z.amp.SendCommand(z.id, cmd, arg)
 }
 
 func (z *zone) Restore(state State) (err error) {

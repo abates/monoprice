@@ -1,10 +1,12 @@
 package monoprice
 
 import (
+	"bufio"
 	"errors"
 	"io"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -96,12 +98,12 @@ func TestState_Unmarshal(t *testing.T) {
 		want    State
 		wantErr error
 	}{
-		{"test 1", "00010000131112100401", State{false, true, false, false, 13, 11, 12, 10, 4, true}, nil},
-		{"test 2", "0001000010111210040", State{}, io.ErrUnexpectedEOF},
-		{"test 3", "77010000101112100401", State{}, strconv.ErrSyntax},
-		{"test 4", "000100dfsf112100401", State{}, strconv.ErrSyntax},
+		{"test 1", "1100010000131112100401", State{11, false, true, false, false, 13, 11, 12, 10, 4, true}, nil},
+		{"test 2", "110001000010111210040", State{}, io.ErrUnexpectedEOF},
+		{"test 3", "1177010000101112100401", State{}, strconv.ErrSyntax},
+		{"test 4", "11000100dfsf112100401", State{}, strconv.ErrSyntax},
 		{"test 5", "", State{}, io.ErrUnexpectedEOF},
-		{"test 6", "0001000013111210040110", State{}, ErrTooLong},
+		{"test 6", "110001000013111210040110", State{}, ErrTooLong},
 	}
 
 	for _, tt := range tests {
@@ -120,15 +122,12 @@ func TestState_Unmarshal(t *testing.T) {
 }
 
 func Test_intMarshaler(t *testing.T) {
-	type args struct {
-		value int
-	}
 	tests := []struct {
 		name  string
 		input State
 		want  string
 	}{
-		{"test 1", State{false, true, false, false, 13, 11, 12, 10, 4, true}, "00010000131112100401"},
+		{"test 1", State{11, false, true, false, false, 13, 11, 12, 10, 4, true}, "1100010000131112100401"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -203,6 +202,91 @@ func TestState_Marshal(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Errorf("State.Marshal() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+type testReader struct {
+	*bufio.Reader
+}
+
+func (tr testReader) readResponse() (string, error) {
+	return tr.ReadString('#')
+}
+
+func TestEchoResponse(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    EchoResponse
+		wantErr error
+	}{
+		{"Good echo", "SomeCmd\r#", EchoResponse{"SomeCmd\r"}, nil},
+		{"Bad echo", "SomeCmd\r", EchoResponse{"SomeCmd\r"}, io.EOF},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := EchoResponse{}
+			reader := testReader{bufio.NewReader(strings.NewReader(test.input))}
+			gotErr := got.Read(reader)
+			if test.want != got {
+				t.Errorf("Wanted %+v but got %+v", test.want, got)
+			}
+			if test.wantErr != gotErr {
+				t.Errorf("Wanted error %v but got %v", test.wantErr, gotErr)
+			}
+		})
+	}
+}
+
+func TestQueryResponse(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    QueryResponse
+		wantErr error
+	}{
+		{
+			name:  "Good echo",
+			input: "?11\r#>1100000000130705100301\r#",
+			want: QueryResponse{
+				EchoResponse{"?11\r"},
+				State{11, false, false, false, false, 13, 07, 05, 10, 03, true},
+			},
+			wantErr: nil,
+		},
+		{
+			name:  "Bad echo",
+			input: "?11\r##",
+			want: QueryResponse{
+				EchoResponse{"?11\r"},
+				State{},
+			},
+			wantErr: ErrInvalidResponse,
+		},
+		{
+			name:  "Invalid Zone",
+			input: "?11\r#",
+			want: QueryResponse{
+				EchoResponse{"?11\r"},
+				State{},
+			},
+			wantErr: ErrInvalidZone,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := QueryResponse{}
+			reader := testReader{bufio.NewReader(strings.NewReader(test.input))}
+			gotErr := got.Read(reader)
+			if test.want != got {
+				t.Errorf("Wanted %+v but got %+v", test.want, got)
+			}
+			if !errors.Is(gotErr, test.wantErr) {
+				t.Errorf("Wanted error %v but got %v", test.wantErr, gotErr)
 			}
 		})
 	}

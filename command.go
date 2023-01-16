@@ -5,16 +5,10 @@ import (
 	"strconv"
 )
 
-type cmdReq struct {
-	cmd  string
-	resp chan<- cmdResp
-}
-
 type cmdResp struct {
 	zone  ZoneID
 	cmd   Command
 	value string
-	err   error
 }
 
 func (cr *cmdResp) Unmarshal(line string) (err error) {
@@ -42,20 +36,6 @@ type Command string
 
 func (c Command) format(v interface{}) string {
 	return fmt.Sprintf(commands[c], v)
-}
-
-type commandSequence struct {
-	zoneID    ZoneID
-	direction string
-	cmd       Command
-	args      string
-}
-
-func (cs *commandSequence) Marshal() string {
-	if len(cs.args) == 0 {
-		return fmt.Sprintf("%s%d%s", cs.direction, cs.zoneID, cs.cmd)
-	}
-	return fmt.Sprintf("%s%d%s%s", cs.direction, cs.zoneID, cs.cmd, cs.args)
 }
 
 var (

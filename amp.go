@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"strings"
+	"sync"
 )
 
 var (
@@ -15,6 +15,7 @@ var (
 	ErrCommand         = errors.New("invalid Command")
 	ErrInvalidResponse = errors.New("invalid response")
 	ErrRetryTimeout    = errors.New("retries exceeded")
+	ErrReadTimeout     = errors.New("read timeout")
 
 	QueryRetryLimit = 3
 )
@@ -22,9 +23,10 @@ var (
 type Amplifier struct {
 	writer     io.Writer
 	reader     *bufio.Reader
-	writeCh    chan<- cmdReq
 	zones      []Zone
 	verboseLog bool
+	mutex      sync.Mutex
+	ignoreEOF  bool
 }
 
 type Option func(*Amplifier)
@@ -36,31 +38,18 @@ func VerboseOption() Option {
 }
 
 func New(port io.ReadWriter, options ...Option) (*Amplifier, error) {
-	writeCh := make(chan cmdReq)
 	amp := &Amplifier{
-		writer:  port,
-		reader:  bufio.NewReader(port),
-		writeCh: writeCh,
+		writer:    port,
+		reader:    bufio.NewReader(port),
+		ignoreEOF: false,
 	}
 
 	for _, option := range options {
 		option(amp)
 	}
 
-	go amp.writeLoop(writeCh)
-
 	err := amp.initZones()
 	return amp, err
-}
-
-func (amp *Amplifier) State(zone ZoneID) (state State, err error) {
-	resp, err := amp.sendQuery(zone, ST)
-	if err == nil {
-		err = state.Unmarshal(resp)
-	} else if err == io.EOF {
-		err = ErrInvalidZone
-	}
-	return
 }
 
 func (amp *Amplifier) Zones() (zones []Zone) {
@@ -73,7 +62,7 @@ func (amp *Amplifier) initZones() error {
 	for i := 1; i < 4; i++ {
 		for j := 1; j < 7; j++ {
 			id := ZoneID(10*i + j)
-			_, err := amp.State(id)
+			_, err := amp.QueryState(id)
 			if err == nil {
 				amp.zones = append(amp.zones, newZone(id, amp))
 				log.Printf("Found Zone %d", id)
@@ -84,99 +73,45 @@ func (amp *Amplifier) initZones() error {
 			}
 		}
 	}
+	amp.ignoreEOF = true
 	return nil
 }
 
-func (amp *Amplifier) readLine() (line string, err error) {
-	data, err := amp.reader.ReadBytes('\n')
+func (amp *Amplifier) readResponse() (string, error) {
+	str, err := amp.reader.ReadString('#')
+	if amp.verboseLog {
+		log.Printf("RX %q (err: %v)", str, err)
+	}
+	return str, err
+}
+
+func (amp *Amplifier) write(cmdStr string, resp Response) error {
+	amp.mutex.Lock()
+	defer amp.mutex.Unlock()
+	cmdStr = cmdStr + "\r\n"
+	if amp.verboseLog {
+		log.Printf("TX %q", cmdStr)
+	}
+	_, err := amp.writer.Write([]byte(cmdStr))
 	if err == nil {
-		if amp.verboseLog {
-			log.Printf("RX %s", string(data))
-		}
-		line = strings.TrimPrefix(strings.TrimSpace(string(data)), "#")
-	} else if amp.verboseLog {
-		log.Printf("RX Error: %v", err)
+		err = resp.Read(amp)
 	}
-	return line, err
+	if err == nil && resp.EchoString() != cmdStr {
+		err = fmt.Errorf("%w wrong echo string, wanted %q got %q", ErrInvalidResponse, cmdStr, resp.EchoString())
+	}
+	return err
 }
 
-func (amp *Amplifier) writeCommand(req *cmdReq) {
-	maxTries := 3
-	resp := cmdResp{}
-	line := ""
-	for tries := 0; tries < maxTries; tries++ {
-		amp.writer.Write([]byte(req.cmd))
-		amp.writer.Write([]byte("\r"))
-		if amp.verboseLog {
-			log.Printf("TX %s", req.cmd)
-		}
-
-		// wait for command to be echoed back
-		line, resp.err = amp.readLine()
-		if resp.err != nil {
-			break
-		}
-		if line != req.cmd {
-			resp.err = ErrInvalidResponse
-			break
-		}
-
-		line, resp.err = amp.readLine()
-		if resp.err != nil {
-			break
-		}
-
-		if line == "" {
-			if amp.verboseLog {
-				log.Printf("Empty response received, re-sending command")
-			}
-			continue
-		}
-
-		if req.cmd[0:1] == "<" && resp.value == req.cmd {
-			resp.err = resp.Unmarshal(line[1:])
-			break
-		}
-
-		if req.cmd[0:1] == "?" && line[0:1] == ">" {
-			resp.err = resp.Unmarshal(line[1:])
-			break
-		}
-
-		resp.err = ErrRetryTimeout
-	}
-
-	req.resp <- resp
+func (amp *Amplifier) QueryState(zone ZoneID) (State, error) {
+	resp := &QueryResponse{}
+	cmdStr := fmt.Sprintf("?%d", zone)
+	err := amp.write(cmdStr, resp)
+	return resp.State, err
 }
 
-func (amp *Amplifier) writeLoop(writeCh <-chan cmdReq) {
-	for req := range writeCh {
-		amp.writeCommand(&req)
-	}
-}
-
-func (amp *Amplifier) sendQuery(zone ZoneID, cmd Command) (string, error) {
-	return amp.write(zone, "?", cmd, "")
-}
-
-func (amp *Amplifier) sendCmd(zone ZoneID, cmd Command, arg string) (string, error) {
-	return amp.write(zone, "<", cmd, arg)
-}
-
-func (amp *Amplifier) write(zone ZoneID, typ string, cmd Command, arg string) (string, error) {
-	ch := make(chan cmdResp, 1)
-	if cmd == ST {
-		cmd = ""
-	}
-
-	cmdStr := ""
-	if len(arg) == 0 {
-		cmdStr = fmt.Sprintf("%s%d%s", typ, zone, cmd)
-	} else {
-		cmdStr = fmt.Sprintf("%s%d%s%s", typ, zone, cmd, arg)
-	}
-
-	amp.writeCh <- cmdReq{cmd: cmdStr, resp: ch}
-	resp := <-ch
-	return resp.value, resp.err
+func (amp *Amplifier) SendCommand(zone ZoneID, cmd Command, arg interface{}) error {
+	argStr := cmd.format(arg)
+	cmdStr := fmt.Sprintf("<%d%s%s", zone, cmd, argStr)
+	resp := &EchoResponse{}
+	return amp.write(cmdStr, resp)
 }
